@@ -1,0 +1,12 @@
+.DS_Store
+/speedier
+/bin
+/build
+/dist
+/target
+*.app
+*.dSYM
+*.log
+*.env
+*.local
+coverage.out
