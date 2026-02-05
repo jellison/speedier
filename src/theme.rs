@@ -8,10 +8,6 @@ pub fn panel() -> Hsla {
     rgb(0x202329).into()
 }
 
-pub fn input() -> Hsla {
-    rgb(0x22252b).into()
-}
-
 pub fn fg() -> Hsla {
     rgb(0xdbdfe6).into()
 }

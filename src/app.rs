@@ -3,12 +3,16 @@ use crate::prefs::Preferences;
 use crate::syntax::{tokenize, TokenKind};
 use crate::theme;
 use gpui::prelude::*;
-use gpui::{div, px, App, Context, Entity, ScrollHandle, Subscription, Window};
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui::{div, px, App, Context, Entity, Hsla, ScrollHandle, Subscription, Window};
+use gpui_component::input::{Input, InputEvent, InputState, Position};
 use gpui_component::{Icon, IconName, Sizable};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::Size as UiSize;
 use gpui_component::{h_flex, v_flex};
+
+const ENABLE_DIGIT_GROUPING: bool = true;
+const DIGIT_GROUP_PADDING_PX: f32 = 3.0;
+const INPUT_GROUP_SEPARATOR: char = '\u{2009}';
 
 pub struct SpeedierApp {
     input: Entity<InputState>,
@@ -21,8 +25,14 @@ pub struct SpeedierApp {
     pending_clear: bool,
     pending_focus: bool,
     pending_scroll_to_bottom: bool,
+    pending_input_reformat: Option<PendingInputReformat>,
     history_scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
+}
+
+struct PendingInputReformat {
+    value: String,
+    cursor_character: u32,
 }
 
 impl SpeedierApp {
@@ -47,7 +57,33 @@ impl SpeedierApp {
         let _subscriptions = vec![cx.subscribe(&input, |this: &mut Self, _input, ev, cx| {
             match ev {
                 InputEvent::Change => {
-                    this.input_value = this.input.read(cx).value().to_string();
+                    let (displayed, display_cursor) = {
+                        let input = this.input.read(cx);
+                        (
+                            input.value().to_string(),
+                            input.cursor_position().character as usize,
+                        )
+                    };
+
+                    let canonical = strip_group_separators(&displayed);
+                    let canonical_cursor =
+                        canonical_cursor_from_display_cursor(&displayed, display_cursor);
+
+                    this.input_value = canonical.clone();
+
+                    if ENABLE_DIGIT_GROUPING {
+                        let formatted = format_expression_for_input(&canonical);
+                        if formatted != displayed {
+                            this.pending_input_reformat = Some(PendingInputReformat {
+                                cursor_character: display_cursor_from_canonical_cursor(
+                                    &formatted,
+                                    canonical_cursor,
+                                ) as u32,
+                                value: formatted,
+                            });
+                            cx.notify();
+                        }
+                    }
                 }
                 InputEvent::PressEnter { .. } => {
                     this.submit();
@@ -61,6 +97,8 @@ impl SpeedierApp {
             state.set_placeholder("Type an expression", window, cx);
         });
 
+        let has_history = history.len() > 0;
+
         Self {
             input,
             input_value: String::new(),
@@ -71,7 +109,8 @@ impl SpeedierApp {
             window_size,
             pending_clear: false,
             pending_focus: true,
-            pending_scroll_to_bottom: false,
+            pending_scroll_to_bottom: has_history,
+            pending_input_reformat: None,
             history_scroll: ScrollHandle::new(),
             _subscriptions,
         }
@@ -103,6 +142,7 @@ impl SpeedierApp {
         }
 
         self.input_value.clear();
+        self.pending_input_reformat = None;
         self.pending_clear = true;
         self.save_prefs();
     }
@@ -223,6 +263,13 @@ impl Render for SpeedierApp {
             self.pending_clear = false;
         }
 
+        if let Some(reformat) = self.pending_input_reformat.take() {
+            self.input.update(cx, |state, cx| {
+                state.set_value(reformat.value, window, cx);
+                state.set_cursor_position(Position::new(0, reformat.cursor_character), window, cx);
+            });
+        }
+
         if self.pending_focus {
             self.input.update(cx, |state, cx| {
                 state.focus(window, cx);
@@ -242,7 +289,14 @@ impl Render for SpeedierApp {
             None => div(),
         };
 
-        let mut history_list = v_flex().gap(px(12.0));
+        let mut history_list = v_flex()
+            .id("history-list")
+            .gap(px(12.0))
+            .w_full()
+            .h_full()
+            .overflow_y_scroll()
+            .track_scroll(&self.history_scroll);
+
         for (idx, entry) in self.history.entries().iter().enumerate() {
             history_list = history_list.child(self.history_row(entry));
             if idx + 1 < self.history.len() {
@@ -252,18 +306,17 @@ impl Render for SpeedierApp {
 
         let history_scroll = div()
             .id("history-scroll")
+            .relative()
             .flex_1()
             .w_full()
             .min_h(px(0.0))
-            .track_scroll(&self.history_scroll)
-            .overflow_y_scroll()
             .child(history_list)
             .vertical_scrollbar(&self.history_scroll);
 
         let input_area = v_flex()
             .gap(px(8.0))
             .child(div().h(px(1.0)).bg(theme::separator()))
-            .child(div().bg(theme::input()).p(px(10.0)).child(input));
+            .child(div().bg(theme::bg()).p(px(10.0)).child(input));
 
         let main_content = v_flex()
             .gap(px(10.0))
@@ -344,9 +397,189 @@ fn tokens_to_line(tokens: &[crate::syntax::Token]) -> gpui::Div {
             TokenKind::Whitespace => theme::syntax_dim(),
             TokenKind::Unknown => theme::fg(),
         };
-        line = line.child(div().text_color(color).child(token.text.clone()));
+        if ENABLE_DIGIT_GROUPING && token.kind == TokenKind::Number {
+            line = line.child(render_number_token(&token.text, color));
+        } else {
+            line = line.child(div().text_color(color).child(token.text.clone()));
+        }
     }
     line
+}
+
+#[derive(Debug)]
+struct NumberSegment {
+    text: String,
+    pad_before: bool,
+}
+
+fn render_number_token(number: &str, color: Hsla) -> gpui::Div {
+    let mut line = h_flex().gap(px(0.0));
+    for segment in split_number_segments(number) {
+        let mut part = div().text_color(color).child(segment.text);
+        if segment.pad_before {
+            part = part.pl(px(DIGIT_GROUP_PADDING_PX));
+        }
+        line = line.child(part);
+    }
+    line
+}
+
+fn split_number_segments(number: &str) -> Vec<NumberSegment> {
+    let (mantissa, exponent) = split_exponent(number);
+    let (sign, unsigned_mantissa) = split_leading_sign(mantissa);
+    let (int_part, frac_part, has_dot) = split_decimal_parts(unsigned_mantissa);
+    let mut segments = Vec::new();
+
+    if let Some(sign) = sign {
+        segments.push(NumberSegment {
+            text: sign.to_string(),
+            pad_before: false,
+        });
+    }
+
+    push_grouped_integer_segments(&mut segments, int_part);
+
+    if has_dot {
+        segments.push(NumberSegment {
+            text: ".".to_string(),
+            pad_before: false,
+        });
+    }
+
+    push_grouped_fraction_segments(&mut segments, frac_part);
+
+    if let Some(exponent) = exponent {
+        segments.push(NumberSegment {
+            text: exponent.to_string(),
+            pad_before: false,
+        });
+    }
+
+    if segments.is_empty() {
+        segments.push(NumberSegment {
+            text: number.to_string(),
+            pad_before: false,
+        });
+    }
+
+    segments
+}
+
+fn format_expression_for_input(expr: &str) -> String {
+    tokenize(expr)
+        .into_iter()
+        .map(|token| {
+            if token.kind == TokenKind::Number {
+                join_number_segments_with_separator(&token.text, INPUT_GROUP_SEPARATOR)
+            } else {
+                token.text
+            }
+        })
+        .collect()
+}
+
+fn strip_group_separators(text: &str) -> String {
+    text.chars().filter(|ch| *ch != INPUT_GROUP_SEPARATOR).collect()
+}
+
+fn canonical_cursor_from_display_cursor(display: &str, display_cursor: usize) -> usize {
+    display
+        .chars()
+        .take(display_cursor)
+        .filter(|ch| *ch != INPUT_GROUP_SEPARATOR)
+        .count()
+}
+
+fn display_cursor_from_canonical_cursor(display: &str, canonical_cursor: usize) -> usize {
+    let mut canonical_count = 0usize;
+    for (display_ix, ch) in display.chars().enumerate() {
+        if canonical_count >= canonical_cursor {
+            return display_ix;
+        }
+        if ch != INPUT_GROUP_SEPARATOR {
+            canonical_count += 1;
+        }
+    }
+    display.chars().count()
+}
+
+fn join_number_segments_with_separator(number: &str, separator: char) -> String {
+    let mut out = String::new();
+    for segment in split_number_segments(number) {
+        if segment.pad_before {
+            out.push(separator);
+        }
+        out.push_str(&segment.text);
+    }
+    out
+}
+
+fn split_exponent(number: &str) -> (&str, Option<&str>) {
+    if let Some(index) = number.find(|ch| ch == 'e' || ch == 'E') {
+        (&number[..index], Some(&number[index..]))
+    } else {
+        (number, None)
+    }
+}
+
+fn split_leading_sign(text: &str) -> (Option<char>, &str) {
+    if let Some(sign) = text.chars().next() {
+        if sign == '+' || sign == '-' {
+            return (Some(sign), &text[sign.len_utf8()..]);
+        }
+    }
+    (None, text)
+}
+
+fn split_decimal_parts(number: &str) -> (&str, &str, bool) {
+    if let Some(dot_index) = number.find('.') {
+        (&number[..dot_index], &number[dot_index + 1..], true)
+    } else {
+        (number, "", false)
+    }
+}
+
+fn push_grouped_integer_segments(segments: &mut Vec<NumberSegment>, int_part: &str) {
+    if int_part.is_empty() {
+        return;
+    }
+
+    let chars: Vec<char> = int_part.chars().collect();
+    let len = chars.len();
+    let first_group_len = if len % 3 == 0 { 3 } else { len % 3 };
+    let mut index = 0;
+    let mut first = true;
+
+    while index < len {
+        let group_len = if first { first_group_len } else { 3 };
+        let text: String = chars[index..index + group_len].iter().collect();
+        segments.push(NumberSegment {
+            text,
+            pad_before: !first,
+        });
+        first = false;
+        index += group_len;
+    }
+}
+
+fn push_grouped_fraction_segments(segments: &mut Vec<NumberSegment>, frac_part: &str) {
+    if frac_part.is_empty() {
+        return;
+    }
+
+    let chars: Vec<char> = frac_part.chars().collect();
+    let mut index = 0;
+    let mut first = true;
+    while index < chars.len() {
+        let end = (index + 3).min(chars.len());
+        let text: String = chars[index..end].iter().collect();
+        segments.push(NumberSegment {
+            text,
+            pad_before: !first,
+        });
+        first = false;
+        index = end;
+    }
 }
 
 fn section_label(text: &str) -> gpui::Div {
@@ -383,4 +616,38 @@ fn icon_button(
                 .with_size(UiSize::Size(px(18.0)))
                 .text_color(theme::fg()),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_number_segments;
+
+    fn to_grouped_text(input: &str) -> String {
+        let mut out = String::new();
+        for segment in split_number_segments(input) {
+            if segment.pad_before {
+                out.push(' ');
+            }
+            out.push_str(&segment.text);
+        }
+        out
+    }
+
+    #[test]
+    fn groups_integer_digits_every_three() {
+        assert_eq!(to_grouped_text("160000"), "160 000");
+        assert_eq!(to_grouped_text("123456789"), "123 456 789");
+    }
+
+    #[test]
+    fn groups_fraction_digits_every_three() {
+        assert_eq!(to_grouped_text("0.004222"), "0.004 222");
+        assert_eq!(to_grouped_text(".123456"), ".123 456");
+    }
+
+    #[test]
+    fn keeps_sign_and_exponent_ungrouped() {
+        assert_eq!(to_grouped_text("-1234567.89012"), "-1 234 567.890 12");
+        assert_eq!(to_grouped_text("1.234567e-10"), "1.234 567e-10");
+    }
 }
