@@ -1,4 +1,3 @@
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TokenKind {
     Whitespace,
@@ -141,7 +140,7 @@ fn is_identifier_part(r: char) -> bool {
 }
 
 fn is_operator_rune(r: char) -> bool {
-    matches!(r, '+' | '-' | '*' | '/' | '%' | '^' | '=')
+    matches!(r, '+' | '-' | '*' | '/' | '%' | '^' | '!' | '=')
 }
 
 fn classify_identifier(ident: &str, runes: &[char], idx: usize) -> TokenKind {

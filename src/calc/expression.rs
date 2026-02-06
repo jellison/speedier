@@ -5,9 +5,23 @@ use std::fmt;
 pub enum Expr {
     Number(f64),
     Ident(String),
-    Unary { op: char, expr: Box<Expr> },
-    Binary { op: char, left: Box<Expr>, right: Box<Expr> },
-    Call { name: String, args: Vec<Expr> },
+    Unary {
+        op: char,
+        expr: Box<Expr>,
+    },
+    Postfix {
+        op: char,
+        expr: Box<Expr>,
+    },
+    Binary {
+        op: char,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    Call {
+        name: String,
+        args: Vec<Expr>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,7 +148,7 @@ impl Parser {
     }
 
     fn parse_power(&mut self) -> Result<Expr, EvaluatorError> {
-        let left = self.parse_primary()?;
+        let left = self.parse_postfix()?;
         if self.match_operator('^') {
             let right = self.parse_unary()?;
             return Ok(Expr::Binary {
@@ -146,13 +160,25 @@ impl Parser {
         Ok(left)
     }
 
+    fn parse_postfix(&mut self) -> Result<Expr, EvaluatorError> {
+        let mut expr = self.parse_primary()?;
+        while self.match_operator('!') {
+            expr = Expr::Postfix {
+                op: '!',
+                expr: Box::new(expr),
+            };
+        }
+        Ok(expr)
+    }
+
     fn parse_primary(&mut self) -> Result<Expr, EvaluatorError> {
         match self.peek().kind {
             TokenKind::Number => {
                 let tok = self.next();
-                let value: f64 = tok.text.parse().map_err(|_| {
-                    EvaluatorError::new(format!("invalid number '{}'", tok.text))
-                })?;
+                let value: f64 = tok
+                    .text
+                    .parse()
+                    .map_err(|_| EvaluatorError::new(format!("invalid number '{}'", tok.text)))?;
                 Ok(Expr::Number(value))
             }
             TokenKind::Identifier => {
@@ -273,7 +299,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, EvaluatorError> {
                 i += 1;
                 continue;
             }
-            '+' | '-' | '*' | '/' | '%' | '^' => {
+            '+' | '-' | '*' | '/' | '%' | '^' | '!' => {
                 tokens.push(Token {
                     kind: TokenKind::Operator,
                     text: r.to_string(),
@@ -307,10 +333,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, EvaluatorError> {
             continue;
         }
 
-        return Err(EvaluatorError::new(format!(
-            "unexpected character '{}'",
-            r
-        )));
+        return Err(EvaluatorError::new(format!("unexpected character '{}'", r)));
     }
 
     tokens.push(Token {
@@ -378,6 +401,7 @@ impl fmt::Display for Expr {
             Expr::Number(value) => write!(f, "{}", value),
             Expr::Ident(name) => write!(f, "{}", name),
             Expr::Unary { op, expr } => write!(f, "{}({})", op, expr),
+            Expr::Postfix { op, expr } => write!(f, "{}{}", expr, op),
             Expr::Binary { op, left, right } => {
                 if *op == '^' {
                     write!(f, "pow({}, {})", left, right)

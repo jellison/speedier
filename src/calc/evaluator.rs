@@ -58,6 +58,16 @@ impl Evaluator {
                     ))),
                 }
             }
+            Expr::Postfix { op, expr } => {
+                let val = self.eval_expr(expr)?;
+                match op {
+                    '!' => self.eval_factorial(val),
+                    _ => Err(EvaluatorError::new(format!(
+                        "unsupported postfix operator '{}'",
+                        op
+                    ))),
+                }
+            }
             Expr::Binary { op, left, right } => {
                 let lhs = self.eval_expr(left)?;
                 let rhs = self.eval_expr(right)?;
@@ -115,10 +125,69 @@ impl Evaluator {
             "abs" => Ok(args.get(0).copied().unwrap_or(0.0).abs()),
             "ceil" => Ok(args.get(0).copied().unwrap_or(0.0).ceil()),
             "floor" => Ok(args.get(0).copied().unwrap_or(0.0).floor()),
-            _ => Err(EvaluatorError::new(format!(
-                "unknown function '{}'",
-                name
-            ))),
+            _ => Err(EvaluatorError::new(format!("unknown function '{}'", name))),
         }
+    }
+
+    fn eval_factorial(&self, value: f64) -> Result<f64, EvaluatorError> {
+        if !value.is_finite() {
+            return Err(EvaluatorError::new(
+                "factorial is only defined for finite values",
+            ));
+        }
+
+        let rounded = value.round();
+        if value < 0.0 || (value - rounded).abs() > 1e-12 {
+            return Err(EvaluatorError::new(
+                "factorial is only defined for non-negative integers",
+            ));
+        }
+
+        let n = rounded as u64;
+        if n > 170 {
+            return Err(EvaluatorError::new(
+                "factorial overflows f64 for inputs greater than 170",
+            ));
+        }
+
+        let mut out = 1.0f64;
+        for i in 2..=n {
+            out *= i as f64;
+        }
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Evaluator;
+
+    #[test]
+    fn evaluates_factorial() {
+        let mut evaluator = Evaluator::with_last(0.0);
+        assert_eq!(evaluator.eval("5!").unwrap(), 120.0);
+        assert_eq!(evaluator.eval("0!").unwrap(), 1.0);
+    }
+
+    #[test]
+    fn factorial_has_higher_precedence_than_power() {
+        let mut evaluator = Evaluator::with_last(0.0);
+        assert_eq!(evaluator.eval("2^3!").unwrap(), 64.0);
+        assert_eq!(evaluator.eval("3!^2").unwrap(), 36.0);
+        assert_eq!(evaluator.eval("-3!").unwrap(), -6.0);
+    }
+
+    #[test]
+    fn factorial_rejects_invalid_inputs() {
+        let mut evaluator = Evaluator::with_last(0.0);
+
+        let negative = evaluator.eval("(-3)!").unwrap_err();
+        assert!(negative.to_string().contains("non-negative integers"));
+
+        let fractional = evaluator.eval("2.5!").unwrap_err();
+        assert!(fractional.to_string().contains("non-negative integers"));
+
+        let overflow = evaluator.eval("171!").unwrap_err();
+        assert!(overflow.to_string().contains("overflows f64"));
     }
 }

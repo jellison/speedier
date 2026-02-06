@@ -5,10 +5,10 @@ use crate::theme;
 use gpui::prelude::*;
 use gpui::{div, px, App, Context, Entity, Hsla, ScrollHandle, Subscription, Window};
 use gpui_component::input::{Input, InputEvent, InputState, Position};
-use gpui_component::{Icon, IconName, Sizable};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::Size as UiSize;
 use gpui_component::{h_flex, v_flex};
+use gpui_component::{Icon, IconName, Sizable};
 
 const ENABLE_DIGIT_GROUPING: bool = true;
 const DIGIT_GROUP_PADDING_PX: f32 = 3.0;
@@ -54,44 +54,45 @@ impl SpeedierApp {
             .or_else(|| last_result_from_history(&history))
             .unwrap_or(0.0);
 
-        let _subscriptions = vec![cx.subscribe(&input, |this: &mut Self, _input, ev, cx| {
-            match ev {
-                InputEvent::Change => {
-                    let (displayed, display_cursor) = {
-                        let input = this.input.read(cx);
-                        (
-                            input.value().to_string(),
-                            input.cursor_position().character as usize,
-                        )
-                    };
+        let _subscriptions =
+            vec![
+                cx.subscribe(&input, |this: &mut Self, _input, ev, cx| match ev {
+                    InputEvent::Change => {
+                        let (displayed, display_cursor) = {
+                            let input = this.input.read(cx);
+                            (
+                                input.value().to_string(),
+                                input.cursor_position().character as usize,
+                            )
+                        };
 
-                    let canonical = strip_group_separators(&displayed);
-                    let canonical_cursor =
-                        canonical_cursor_from_display_cursor(&displayed, display_cursor);
+                        let canonical = strip_group_separators(&displayed);
+                        let canonical_cursor =
+                            canonical_cursor_from_display_cursor(&displayed, display_cursor);
 
-                    this.input_value = canonical.clone();
+                        this.input_value = canonical.clone();
 
-                    if ENABLE_DIGIT_GROUPING {
-                        let formatted = format_expression_for_input(&canonical);
-                        if formatted != displayed {
-                            this.pending_input_reformat = Some(PendingInputReformat {
-                                cursor_character: display_cursor_from_canonical_cursor(
-                                    &formatted,
-                                    canonical_cursor,
-                                ) as u32,
-                                value: formatted,
-                            });
-                            cx.notify();
+                        if ENABLE_DIGIT_GROUPING {
+                            let formatted = format_expression_for_input(&canonical);
+                            if formatted != displayed {
+                                this.pending_input_reformat = Some(PendingInputReformat {
+                                    cursor_character: display_cursor_from_canonical_cursor(
+                                        &formatted,
+                                        canonical_cursor,
+                                    ) as u32,
+                                    value: formatted,
+                                });
+                                cx.notify();
+                            }
                         }
                     }
-                }
-                InputEvent::PressEnter { .. } => {
-                    this.submit();
-                    cx.notify();
-                }
-                _ => {}
-            }
-        })];
+                    InputEvent::PressEnter { .. } => {
+                        this.submit();
+                        cx.notify();
+                    }
+                    _ => {}
+                }),
+            ];
 
         input.update(cx, |state, cx| {
             state.set_placeholder("Type an expression", window, cx);
@@ -173,9 +174,7 @@ impl SpeedierApp {
         let expr_line = tokens_to_line(&expr_tokens);
 
         let result_line = if let Some(err) = &entry.err {
-            div()
-                .text_color(theme::error())
-                .child(format!("✕ {}", err))
+            div().text_color(theme::error()).child(format!("✕ {}", err))
         } else {
             let mut result_tokens = vec![crate::syntax::Token {
                 kind: TokenKind::Operator,
@@ -185,10 +184,7 @@ impl SpeedierApp {
             tokens_to_line(&result_tokens)
         };
 
-        v_flex()
-            .gap(px(2.0))
-            .child(expr_line)
-            .child(result_line)
+        v_flex().gap(px(2.0)).child(expr_line).child(result_line)
     }
 
     fn reference_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement + '_ {
@@ -210,6 +206,9 @@ impl SpeedierApp {
 
         let content = v_flex()
             .gap(px(6.0))
+            .child(section_label("Operators"))
+            .child(text_label("x! - factorial (non-negative integers)"))
+            .child(div().h(px(1.0)).bg(theme::separator()))
             .child(section_label("Functions"))
             .child(text_label("sin(x) - sine (radians)"))
             .child(text_label("cos(x) - cosine (radians)"))
@@ -240,16 +239,12 @@ impl SpeedierApp {
 }
 
 fn last_result_from_history(history: &History) -> Option<f64> {
-    history
-        .entries()
-        .iter()
-        .rev()
-        .find_map(|entry| {
-            if entry.err.is_some() {
-                return None;
-            }
-            entry.result.parse::<f64>().ok()
-        })
+    history.entries().iter().rev().find_map(|entry| {
+        if entry.err.is_some() {
+            return None;
+        }
+        entry.result.parse::<f64>().ok()
+    })
 }
 
 impl Render for SpeedierApp {
@@ -300,7 +295,12 @@ impl Render for SpeedierApp {
         for (idx, entry) in self.history.entries().iter().enumerate() {
             history_list = history_list.child(self.history_row(entry));
             if idx + 1 < self.history.len() {
-                history_list = history_list.child(div().h(px(1.0)).bg(theme::separator()));
+                history_list = history_list.child(
+                    div()
+                        .w_full()
+                        .px(px(10.0))
+                        .child(div().w_full().h(px(1.0)).bg(theme::separator())),
+                );
             }
         }
 
@@ -313,21 +313,30 @@ impl Render for SpeedierApp {
             .child(history_list)
             .vertical_scrollbar(&self.history_scroll);
 
-        let input_area = v_flex()
-            .gap(px(8.0))
-            .child(div().h(px(1.0)).bg(theme::separator()))
+        let results_area = v_flex()
+            .gap(px(10.0))
+            .p(px(16.0))
+            .flex_1()
+            .w_full()
+            .min_h(px(0.0))
+            .child(error_line)
+            .child(history_scroll);
+
+        let input_area = div()
+            .w_full()
+            .px(px(16.0))
+            .pt(px(10.0))
+            .pb(px(16.0))
             .child(div().bg(theme::bg()).p(px(10.0)).child(input));
 
         let main_content = v_flex()
-            .gap(px(10.0))
-            .p(px(16.0))
             .bg(theme::bg())
             .flex_1()
             .w_full()
             .h_full()
             .min_h(px(0.0))
-            .child(error_line)
-            .child(history_scroll)
+            .child(results_area)
+            .child(div().w_full().h(px(1.0)).bg(theme::separator()))
             .child(input_area);
 
         let main = if self.reference_visible {
@@ -342,16 +351,13 @@ impl Render for SpeedierApp {
                     cx.notify();
                 }),
             );
-            div()
-                .size_full()
-                .child(main_content)
-                .child(
-                    div()
-                        .absolute()
-                        .top(px(18.0))
-                        .right(px(18.0))
-                        .child(open_button),
-                )
+            div().size_full().child(main_content).child(
+                div()
+                    .absolute()
+                    .top(px(18.0))
+                    .right(px(18.0))
+                    .child(open_button),
+            )
         };
 
         if self.reference_visible {
@@ -479,7 +485,9 @@ fn format_expression_for_input(expr: &str) -> String {
 }
 
 fn strip_group_separators(text: &str) -> String {
-    text.chars().filter(|ch| *ch != INPUT_GROUP_SEPARATOR).collect()
+    text.chars()
+        .filter(|ch| *ch != INPUT_GROUP_SEPARATOR)
+        .collect()
 }
 
 fn canonical_cursor_from_display_cursor(display: &str, display_cursor: usize) -> usize {
@@ -583,9 +591,7 @@ fn push_grouped_fraction_segments(segments: &mut Vec<NumberSegment>, frac_part: 
 }
 
 fn section_label(text: &str) -> gpui::Div {
-    div()
-        .text_color(theme::fg())
-        .child(text.to_string())
+    div().text_color(theme::fg()).child(text.to_string())
 }
 
 fn text_label(text: &str) -> gpui::Div {

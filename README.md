@@ -18,11 +18,11 @@ Speedier is a native macOS calculator written in Rust (GPUI), inspired by [Speed
    A window titled “Speedier” should open with an input field and history list.
 
 ## Expression syntax
-- Operators: `+`, `-`, `*`, `/`, `%`, `^` (exponent, right-associative).
+- Operators: `+`, `-`, `*`, `/`, `%`, `^` (exponent, right-associative), `!` (factorial for non-negative integers).
 - Leading operators (`+`, `-`, `*`, `/`, `%`, `^`) imply `ans` (e.g. `-2` becomes `ans-2`). Use parentheses for negatives: `(-3)`.
 - Functions: `sin`, `cos`, `tan`, `sqrt`, `pow`, `log`, `ln`, `abs`, `ceil`, `floor`.
 - Constants: `pi`, `e`, `ans`.
-- Examples: `2^3`, `pow(2, 3)`, `ans-5`, `(-3)^2`, `1.2e-3`.
+- Examples: `5!`, `2^3!`, `pow(2, 3)`, `ans-5`, `(-3)^2`, `1.2e-3`.
 
 ## Install on macOS
 The script below packages a native `.app` bundle and installs it into `/Applications`, replacing any existing install. This makes it discoverable by Spotlight/Alfred.
